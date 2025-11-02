@@ -1,0 +1,480 @@
+/**
+ * SIMULADOR DE CIRCUITOS LOGICOS - VERSION SIMPLIFICADA
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <stdbool.h>
+
+#define MAX_COMPUERTAS 100
+#define MAX_ENTRADAS 8
+#define MAX_SALIDAS 4
+#define MAX_CONEXIONES 200
+#define TAMANO_POBLACION 50
+#define GENERACIONES 100
+#define TASA_MUTACION 0.1
+#define TASA_CRUCE 0.7
+#define MAX_ENTRADAS_COMPUERTA 3
+#define TAMANO_TABLA_VERDAD (1 << MAX_ENTRADAS)
+
+// Tipos de compuertas
+typedef enum {
+    COMPUERTA_ENTRADA,
+    COMPUERTA_SALIDA,
+    COMPUERTA_AND,
+    COMPUERTA_OR,
+    COMPUERTA_NOT,
+    COMPUERTA_XOR,
+    COMPUERTA_NAND,
+    COMPUERTA_NOR,
+    COMPUERTA_XNOR,
+    COMPUERTA_BUFFER
+} TipoCompuerta;
+
+// Estructura para una compuerta
+typedef struct {
+    int id;
+    TipoCompuerta tipo;
+    int entradas[MAX_ENTRADAS_COMPUERTA];
+    int num_entradas;
+    bool valor_salida;
+    bool evaluada;
+    int nivel;
+    int x, y;
+} Compuerta;
+
+// Conexion entre compuertas
+typedef struct {
+    int compuerta_origen;
+    int compuerta_destino;
+    int pin_destino;
+} Conexion;
+
+// Estructura del circuito
+typedef struct {
+    Compuerta compuertas[MAX_COMPUERTAS];
+    int num_compuertas;
+    Conexion conexiones[MAX_CONEXIONES];
+    int num_conexiones;
+    int compuertas_entrada[MAX_ENTRADAS];
+    int num_entradas;
+    int compuertas_salida[MAX_SALIDAS];
+    int num_salidas;
+    bool tabla_verdad[TAMANO_TABLA_VERDAD][MAX_SALIDAS];
+    int puntuacion_complejidad;
+} Circuito;
+
+// Individuo del algoritmo genetico
+typedef struct {
+    int permutacion[MAX_COMPUERTAS];
+    Circuito circuito;
+    double aptitud;
+} Individuo;
+
+// Poblacion del algoritmo genetico
+typedef struct {
+    Individuo individuos[TAMANO_POBLACION];
+    Individuo mejor_individuo;
+    int generacion;
+} Poblacion;
+
+// FUNCIONES DE COMPUERTAS LOGICAS
+
+bool evaluar_and(bool entradas[], int num_entradas) {
+    bool resultado = true;
+    for (int i = 0; i < num_entradas; i++) {
+        resultado = resultado && entradas[i];
+    }
+    return resultado;
+}
+
+bool evaluar_or(bool entradas[], int num_entradas) {
+    bool resultado = false;
+    for (int i = 0; i < num_entradas; i++) {
+        resultado = resultado || entradas[i];
+    }
+    return resultado;
+}
+
+bool evaluar_xor(bool entradas[], int num_entradas) {
+    bool resultado = false;
+    for (int i = 0; i < num_entradas; i++) {
+        resultado = resultado ^ entradas[i];
+    }
+    return resultado;
+}
+
+bool evaluar_nand(bool entradas[], int num_entradas) {
+    return !evaluar_and(entradas, num_entradas);
+}
+
+bool evaluar_nor(bool entradas[], int num_entradas) {
+    return !evaluar_or(entradas, num_entradas);
+}
+
+bool evaluar_xnor(bool entradas[], int num_entradas) {
+    return !evaluar_xor(entradas, num_entradas);
+}
+
+bool evaluar_compuerta(TipoCompuerta tipo, bool entradas[], int num_entradas) {
+    switch (tipo) {
+        case COMPUERTA_AND:
+            return evaluar_and(entradas, num_entradas);
+        case COMPUERTA_OR:
+            return evaluar_or(entradas, num_entradas);
+        case COMPUERTA_NOT:
+            return !entradas[0];
+        case COMPUERTA_XOR:
+            return evaluar_xor(entradas, num_entradas);
+        case COMPUERTA_NAND:
+            return evaluar_nand(entradas, num_entradas);
+        case COMPUERTA_NOR:
+            return evaluar_nor(entradas, num_entradas);
+        case COMPUERTA_XNOR:
+            return evaluar_xnor(entradas, num_entradas);
+        case COMPUERTA_BUFFER:
+            return entradas[0];
+        default:
+            return false;
+    }
+}
+
+// FUNCIONES DEL CIRCUITO
+
+void inicializar_circuito(Circuito *circuito) {
+    circuito->num_compuertas = 0;
+    circuito->num_conexiones = 0;
+    circuito->num_entradas = 0;
+    circuito->num_salidas = 0;
+    circuito->puntuacion_complejidad = 0;
+    memset(circuito->compuertas, 0, sizeof(circuito->compuertas));
+    memset(circuito->conexiones, 0, sizeof(circuito->conexiones));
+}
+
+int agregar_compuerta(Circuito *circuito, TipoCompuerta tipo) {
+    if (circuito->num_compuertas >= MAX_COMPUERTAS) return -1;
+    
+    int id = circuito->num_compuertas;
+    circuito->compuertas[id].id = id;
+    circuito->compuertas[id].tipo = tipo;
+    circuito->compuertas[id].num_entradas = 0;
+    circuito->compuertas[id].evaluada = false;
+    circuito->compuertas[id].valor_salida = false;
+    circuito->compuertas[id].nivel = 0;
+    
+    if (tipo == COMPUERTA_ENTRADA) {
+        circuito->compuertas_entrada[circuito->num_entradas++] = id;
+    } else if (tipo == COMPUERTA_SALIDA) {
+        circuito->compuertas_salida[circuito->num_salidas++] = id;
+    }
+    
+    circuito->num_compuertas++;
+    return id;
+}
+
+void conectar_compuertas(Circuito *circuito, int origen, int destino, int pin) {
+    if (circuito->num_conexiones >= MAX_CONEXIONES) return;
+    
+    circuito->conexiones[circuito->num_conexiones].compuerta_origen = origen;
+    circuito->conexiones[circuito->num_conexiones].compuerta_destino = destino;
+    circuito->conexiones[circuito->num_conexiones].pin_destino = pin;
+    circuito->num_conexiones++;
+    
+    if (pin < MAX_ENTRADAS_COMPUERTA) {
+        circuito->compuertas[destino].entradas[pin] = origen;
+        if (pin >= circuito->compuertas[destino].num_entradas) {
+            circuito->compuertas[destino].num_entradas = pin + 1;
+        }
+    }
+}
+
+void ordenar_topologicamente(Circuito *circuito) {
+    for (int i = 0; i < circuito->num_compuertas; i++) {
+        circuito->compuertas[i].nivel = 0;
+    }
+    
+    for (int i = 0; i < circuito->num_entradas; i++) {
+        circuito->compuertas[circuito->compuertas_entrada[i]].nivel = 0;
+    }
+    
+    bool cambio = true;
+    while (cambio) {
+        cambio = false;
+        for (int i = 0; i < circuito->num_conexiones; i++) {
+            int origen = circuito->conexiones[i].compuerta_origen;
+            int destino = circuito->conexiones[i].compuerta_destino;
+            
+            if (circuito->compuertas[destino].nivel <= circuito->compuertas[origen].nivel) {
+                circuito->compuertas[destino].nivel = circuito->compuertas[origen].nivel + 1;
+                cambio = true;
+            }
+        }
+    }
+}
+
+void resetear_evaluacion(Circuito *circuito) {
+    for (int i = 0; i < circuito->num_compuertas; i++) {
+        circuito->compuertas[i].evaluada = false;
+        circuito->compuertas[i].valor_salida = false;
+    }
+}
+
+bool evaluar_compuerta_recursiva(Circuito *circuito, int id_compuerta) {
+    Compuerta *compuerta = &circuito->compuertas[id_compuerta];
+    
+    if (compuerta->evaluada) {
+        return compuerta->valor_salida;
+    }
+    
+    if (compuerta->tipo == COMPUERTA_ENTRADA) {
+        compuerta->evaluada = true;
+        return compuerta->valor_salida;
+    }
+    
+    bool entradas[MAX_ENTRADAS_COMPUERTA];
+    for (int i = 0; i < compuerta->num_entradas; i++) {
+        entradas[i] = evaluar_compuerta_recursiva(circuito, compuerta->entradas[i]);
+    }
+    
+    compuerta->valor_salida = evaluar_compuerta(compuerta->tipo, entradas, compuerta->num_entradas);
+    compuerta->evaluada = true;
+    
+    return compuerta->valor_salida;
+}
+
+void simular_circuito(Circuito *circuito, bool valores_entrada[]) {
+    resetear_evaluacion(circuito);
+    
+    for (int i = 0; i < circuito->num_entradas; i++) {
+        circuito->compuertas[circuito->compuertas_entrada[i]].valor_salida = valores_entrada[i];
+        circuito->compuertas[circuito->compuertas_entrada[i]].evaluada = true;
+    }
+    
+    for (int i = 0; i < circuito->num_salidas; i++) {
+        evaluar_compuerta_recursiva(circuito, circuito->compuertas_salida[i]);
+    }
+}
+
+void generar_tabla_verdad(Circuito *circuito) {
+    int num_combinaciones = 1 << circuito->num_entradas;
+    
+    for (int i = 0; i < num_combinaciones; i++) {
+        bool entradas[MAX_ENTRADAS];
+        
+        for (int j = 0; j < circuito->num_entradas; j++) {
+            entradas[j] = (i >> j) & 1;
+        }
+        
+        simular_circuito(circuito, entradas);
+        
+        for (int j = 0; j < circuito->num_salidas; j++) {
+            circuito->tabla_verdad[i][j] = 
+                circuito->compuertas[circuito->compuertas_salida[j]].valor_salida;
+        }
+    }
+}
+
+// FUNCIONES DE VISUALIZACION SIMPLIFICADAS
+
+void imprimir_tabla_verdad_simple(Circuito *circuito) {
+    printf("\nTabla de Verdad:\n\n");
+    
+    // Encabezados
+    for (int i = 0; i < circuito->num_entradas; i++) {
+        printf("E%d ", i);
+    }
+    printf("  ");
+    for (int i = 0; i < circuito->num_salidas; i++) {
+        printf("S%d ", i);
+    }
+    printf("\n");
+    
+    // Datos
+    int num_combinaciones = 1 << circuito->num_entradas;
+    for (int i = 0; i < num_combinaciones; i++) {
+        for (int j = 0; j < circuito->num_entradas; j++) {
+            printf("%d  ", (i >> j) & 1);
+        }
+        printf("  ");
+        for (int j = 0; j < circuito->num_salidas; j++) {
+            printf("%d  ", circuito->tabla_verdad[i][j]);
+        }
+        printf("\n");
+    }
+}
+
+void imprimir_estadisticas_simple(Circuito *circuito) {
+    printf("\nEstadisticas:\n");
+    printf("Total de compuertas: %d\n", circuito->num_compuertas);
+    printf("Total de conexiones: %d\n", circuito->num_conexiones);
+    printf("Compuertas de entrada: %d\n", circuito->num_entradas);
+    printf("Compuertas de salida: %d\n", circuito->num_salidas);
+}
+
+// FUNCION PARA PROBAR INTERACTIVAMENTE
+void probar_circuito_interactivo(Circuito *circuito, const char* nombre) {
+    printf("\n%s - Modo Interactivo\n\n", nombre);
+    
+    char continuar = 's';
+    
+    while (continuar == 's' || continuar == 'S') {
+        bool entradas[MAX_ENTRADAS];
+        
+        printf("Ingrese valores de entrada:\n");
+        for (int i = 0; i < circuito->num_entradas; i++) {
+            int valor;
+            printf("Entrada %d (0 o 1): ", i);
+            scanf("%d", &valor);
+            entradas[i] = (valor != 0);
+        }
+        
+        simular_circuito(circuito, entradas);
+        
+        printf("\nResultado:\n");
+        printf("Entradas: ");
+        for (int i = 0; i < circuito->num_entradas; i++) {
+            printf("%d ", entradas[i]);
+        }
+        
+        printf("\nSalidas: ");
+        for (int i = 0; i < circuito->num_salidas; i++) {
+            bool salida = circuito->compuertas[circuito->compuertas_salida[i]].valor_salida;
+            printf("%d ", salida);
+        }
+        printf("\n");
+        
+        // Explicacion para sumador
+        if (strcmp(nombre, "Sumador Completo") == 0) {
+            printf("(A=%d + B=%d + Cin=%d = Sum=%d, Cout=%d)\n", 
+                   entradas[0], entradas[1], entradas[2],
+                   circuito->compuertas[circuito->compuertas_salida[0]].valor_salida,
+                   circuito->compuertas[circuito->compuertas_salida[1]].valor_salida);
+        }
+        
+        printf("\nProbar otra combinacion? (s/n): ");
+        scanf(" %c", &continuar);
+        printf("\n");
+    }
+}
+
+// CIRCUITOS DE EJEMPLO
+
+void crear_sumador_completo(Circuito *circuito) {
+    inicializar_circuito(circuito);
+    
+    // Entradas: A, B, Cin
+    int a = agregar_compuerta(circuito, COMPUERTA_ENTRADA);
+    int b = agregar_compuerta(circuito, COMPUERTA_ENTRADA);
+    int cin = agregar_compuerta(circuito, COMPUERTA_ENTRADA);
+    
+    // Compuertas intermedias
+    int xor1 = agregar_compuerta(circuito, COMPUERTA_XOR);
+    int xor2 = agregar_compuerta(circuito, COMPUERTA_XOR);
+    int and1 = agregar_compuerta(circuito, COMPUERTA_AND);
+    int and2 = agregar_compuerta(circuito, COMPUERTA_AND);
+    int or1 = agregar_compuerta(circuito, COMPUERTA_OR);
+    
+    // Salidas: Sum, Cout
+    int sum = agregar_compuerta(circuito, COMPUERTA_SALIDA);
+    int cout = agregar_compuerta(circuito, COMPUERTA_SALIDA);
+    
+    // Conexiones para Sum = A XOR B XOR Cin
+    conectar_compuertas(circuito, a, xor1, 0);
+    conectar_compuertas(circuito, b, xor1, 1);
+    conectar_compuertas(circuito, xor1, xor2, 0);
+    conectar_compuertas(circuito, cin, xor2, 1);
+    conectar_compuertas(circuito, xor2, sum, 0);
+    
+    // Conexiones para Cout = (A AND B) OR (Cin AND (A XOR B))
+    conectar_compuertas(circuito, a, and1, 0);
+    conectar_compuertas(circuito, b, and1, 1);
+    conectar_compuertas(circuito, cin, and2, 0);
+    conectar_compuertas(circuito, xor1, and2, 1);
+    conectar_compuertas(circuito, and1, or1, 0);
+    conectar_compuertas(circuito, and2, or1, 1);
+    conectar_compuertas(circuito, or1, cout, 0);
+}
+
+void crear_multiplexor_2a1(Circuito *circuito) {
+    inicializar_circuito(circuito);
+    
+    // Entradas: A, B, Sel
+    int a = agregar_compuerta(circuito, COMPUERTA_ENTRADA);
+    int b = agregar_compuerta(circuito, COMPUERTA_ENTRADA);
+    int sel = agregar_compuerta(circuito, COMPUERTA_ENTRADA);
+    
+    // Compuertas intermedias
+    int not1 = agregar_compuerta(circuito, COMPUERTA_NOT);
+    int and1 = agregar_compuerta(circuito, COMPUERTA_AND);
+    int and2 = agregar_compuerta(circuito, COMPUERTA_AND);
+    int or1 = agregar_compuerta(circuito, COMPUERTA_OR);
+    
+    // Salida
+    int salida = agregar_compuerta(circuito, COMPUERTA_SALIDA);
+    
+    // Conexiones: Out = (A AND NOT(Sel)) OR (B AND Sel)
+    conectar_compuertas(circuito, sel, not1, 0);
+    conectar_compuertas(circuito, a, and1, 0);
+    conectar_compuertas(circuito, not1, and1, 1);
+    conectar_compuertas(circuito, b, and2, 0);
+    conectar_compuertas(circuito, sel, and2, 1);
+    conectar_compuertas(circuito, and1, or1, 0);
+    conectar_compuertas(circuito, and2, or1, 1);
+    conectar_compuertas(circuito, or1, salida, 0);
+}
+
+int main() {
+    srand(time(NULL));
+    
+    int opcion;
+    do {
+        printf("\nMENU:\n");
+        printf("1. Probar Sumador Completo (modo interactivo)\n");
+        printf("2. Probar Multiplexor 2:1 (modo interactivo)\n");
+        printf("3. Ver tabla de verdad del Sumador\n");
+        printf("4. Ver tabla de verdad del Multiplexor\n");
+        printf("0. Salir\n");
+        printf("\nOpcion: ");
+        scanf("%d", &opcion);
+        
+        Circuito circuito;
+        
+        switch (opcion) {
+            case 1:
+                crear_sumador_completo(&circuito);
+                probar_circuito_interactivo(&circuito, "Sumador Completo");
+                break;
+                
+            case 2:
+                crear_multiplexor_2a1(&circuito);
+                probar_circuito_interactivo(&circuito, "Multiplexor 2:1");
+                break;
+                
+            case 3:
+                crear_sumador_completo(&circuito);
+                generar_tabla_verdad(&circuito);
+                imprimir_tabla_verdad_simple(&circuito);
+                imprimir_estadisticas_simple(&circuito);
+                break;
+                
+            case 4:
+                crear_multiplexor_2a1(&circuito);
+                generar_tabla_verdad(&circuito);
+                imprimir_tabla_verdad_simple(&circuito);
+                imprimir_estadisticas_simple(&circuito);
+                break;
+                
+            case 0:
+                printf("\nSaliendo...\n");
+                break;
+                
+            default:
+                printf("Opcion invalida\n");
+        }
+        
+    } while (opcion != 0);
+    
+    return 0;
+}
